@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+build/
+
+# OS
+.DS_Store
+
+# Environment
+.env*
+!.env.example
+
+# IDE
+.vscode/
+.idea/

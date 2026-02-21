@@ -1,0 +1,26 @@
+{
+  "name": "@rovn/mcp-server",
+  "version": "0.1.0",
+  "description": "Rovn MCP Server — governance tools for Claude, GPT, and any MCP-compatible agent",
+  "main": "dist/server.js",
+  "bin": {
+    "rovn-mcp-server": "./dist/server.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/server.js"
+  },
+  "keywords": [
+    "rovn",
+    "mcp",
+    "governance",
+    "agent",
+    "claude"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.3.0",
+    "typescript": "^5.4.0"
+  }
+}
