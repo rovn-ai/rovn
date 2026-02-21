@@ -1,0 +1,25 @@
+{
+  "name": "@rovn/cli",
+  "version": "0.1.0",
+  "description": "Rovn CLI — governance toolkit for AI agents",
+  "bin": {
+    "rovn": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "rovn",
+    "ai",
+    "agent",
+    "governance",
+    "cli"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.0"
+  }
+}

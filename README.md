@@ -30,7 +30,7 @@ Agents use these open-source tools to register, report activities, check policie
 | [`sdk-python`](./packages/sdk-python) | Python SDK (zero dependencies) | `pip install rovn-sdk` |
 | [`sdk-ts`](./packages/sdk-ts) | TypeScript/JavaScript SDK (zero dependencies) | `npm install @rovn/sdk` |
 | [`mcp-server`](./packages/mcp-server) | MCP Server for Claude, Cursor, GPT, etc. | `npx @rovn/mcp-server` |
-| [`cli`](./packages/cli) | CLI for agents & developers | `npm install -g @rovn/cli` (coming soon) |
+| [`cli`](./packages/cli) | CLI for agents & developers | `npm install -g @rovn/cli` |
 
 ## Quick Start
 
