@@ -27,29 +27,121 @@ import { createInterface } from 'readline';
 
 // ─── Config ─────────────────────────────────────────────────
 
-const args = process.argv.slice(2);
-const config = {
-  rovnUrl: getArg(args, '--url') ?? process.env.ROVN_URL ?? 'https://rovn.io',
-  ownerEmail: getArg(args, '--email') ?? process.env.ROVN_OWNER_EMAIL ?? '',
-  apiKey: getArg(args, '--api-key') ?? process.env.ROVN_API_KEY ?? '',
-  agentId: getArg(args, '--agent-id') ?? process.env.ROVN_AGENT_ID ?? '',
-};
+export interface ServerConfig {
+  rovnUrl: string;
+  ownerEmail: string;
+  apiKey: string;
+  agentId: string;
+}
 
-function getArg(args: string[], flag: string): string | undefined {
+export function getArg(args: string[], flag: string): string | undefined {
   const idx = args.indexOf(flag);
   return idx >= 0 ? args[idx + 1] : undefined;
 }
 
-function requireAgent(): string | null {
-  if (!config.agentId || !config.apiKey) {
+export function createConfig(args: string[]): ServerConfig {
+  return {
+    rovnUrl: getArg(args, '--url') ?? process.env.ROVN_URL ?? 'https://rovn.io',
+    ownerEmail: getArg(args, '--email') ?? process.env.ROVN_OWNER_EMAIL ?? '',
+    apiKey: getArg(args, '--api-key') ?? process.env.ROVN_API_KEY ?? '',
+    agentId: getArg(args, '--agent-id') ?? process.env.ROVN_AGENT_ID ?? '',
+  };
+}
+
+const config = createConfig(process.argv.slice(2));
+
+export function requireAgent(cfg: ServerConfig): string | null {
+  if (!cfg.agentId || !cfg.apiKey) {
     return 'Not registered. Call rovn_register first.';
   }
   return null;
 }
 
+// ─── HTTP Client (hardened) ─────────────────────────────────
+
+const HTTP_TIMEOUT = 15000;
+
+function httpStatusMessage(status: number): string {
+  if (status === 401 || status === 403) return 'Authentication failed — check your API key or call rovn_register';
+  if (status === 404) return 'Resource not found';
+  if (status >= 500) return `Server error (${status}) — try again later`;
+  return `Request failed (${status})`;
+}
+
+async function safeFetch(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(HTTP_TIMEOUT),
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      return { success: false, error: 'Request timed out — check your network connection' };
+    }
+    return { success: false, error: 'Could not connect to server — verify the URL and network' };
+  }
+
+  if (!res.ok) {
+    let serverMsg = '';
+    try {
+      const body = await res.json() as Record<string, unknown>;
+      serverMsg = (body.error as string) ?? '';
+    } catch { /* ignore */ }
+    return { success: false, error: serverMsg || httpStatusMessage(res.status) };
+  }
+
+  try {
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return { success: false, error: 'Invalid response from server (non-JSON)' };
+  }
+}
+
+export async function rovnPost(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
+
+  return safeFetch(`${config.rovnUrl}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+export async function rovnGet(path: string): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = {};
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
+
+  return safeFetch(`${config.rovnUrl}${path}`, { headers });
+}
+
+export async function rovnPatch(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
+
+  return safeFetch(`${config.rovnUrl}${path}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+// ─── Auto-Logging (fire-and-forget) ─────────────────────────
+
+function autoLog(title: string, type: string = 'governance'): void {
+  if (!config.agentId || !config.apiKey) return;
+  // Fire-and-forget — don't await, don't block the tool response
+  rovnPost(`/api/agents/${config.agentId}/activities`, {
+    type,
+    title,
+    metadata: { source: 'mcp-auto' },
+  }).catch(() => { /* ignore auto-log failures */ });
+}
+
 // ─── MCP Tools Definition ───────────────────────────────────
 
-const TOOLS = [
+export const TOOLS = [
   {
     name: 'rovn_register',
     description: 'Register this agent with Rovn governance platform. Returns an API key and agent ID. Call this once at the start.',
@@ -154,13 +246,13 @@ const TOOLS = [
 
 // ─── MCP Protocol Handler ───────────────────────────────────
 
-async function handleRequest(request: { id: number; method: string; params?: Record<string, unknown> }) {
+export async function handleRequest(request: { id: number; method: string; params?: Record<string, unknown> }) {
   switch (request.method) {
     case 'initialize':
       return {
         protocolVersion: '2024-11-05',
         capabilities: { tools: {} },
-        serverInfo: { name: 'rovn-governance', version: '1.0.0' },
+        serverInfo: { name: 'rovn-governance', version: '0.1.0' },
       };
 
     case 'tools/list':
@@ -170,19 +262,37 @@ async function handleRequest(request: { id: number; method: string; params?: Rec
       return handleToolCall(request.params as { name: string; arguments: Record<string, unknown> });
 
     case 'notifications/initialized':
-      return {};
+      return null; // Notifications don't need a response
 
     default:
       return { error: { code: -32601, message: `Unknown method: ${request.method}` } };
   }
 }
 
-async function handleToolCall(params: { name: string; arguments: Record<string, unknown> }) {
+export async function handleToolCall(params: { name: string; arguments: Record<string, unknown> }) {
   const { name, arguments: toolArgs } = params;
 
   try {
     switch (name) {
       case 'rovn_register': {
+        // Reuse existing agent if already registered (api-key + agent-id set)
+        if (config.apiKey && config.agentId) {
+          // Validate existing credentials by fetching trust score
+          const check = await rovnGet(`/api/agents/${config.agentId}/trust-score`);
+          if (check.success) {
+            return toolResult({
+              success: true,
+              data: {
+                id: config.agentId,
+                message: 'Already registered. Using existing agent credentials.',
+              },
+            });
+          }
+          // If validation fails, fall through to re-register
+          config.apiKey = '';
+          config.agentId = '';
+        }
+
         const body: Record<string, unknown> = {
           name: toolArgs.name,
           description: toolArgs.description,
@@ -196,6 +306,7 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
         if (res.success && data) {
           config.apiKey = data.api_key as string;
           config.agentId = data.id as string;
+          autoLog(`Registered as ${data.name}`, 'registration');
           return toolResult({
             success: true,
             data: {
@@ -210,7 +321,7 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
       }
 
       case 'rovn_log_activity': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
         return toolResult(await rovnPost(`/api/agents/${config.agentId}/activities`, {
@@ -222,31 +333,38 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
       }
 
       case 'rovn_check_action': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
-        return toolResult(await rovnPost(`/api/agents/${config.agentId}/check`, {
-          action: toolArgs.action,
-          context: toolArgs.context,
-          urgency: toolArgs.urgency,
-          cost: toolArgs.cost,
-        }));
+        // Use GET with query params (matches the API endpoint)
+        const params = new URLSearchParams();
+        params.set('action', toolArgs.action as string);
+        if (toolArgs.urgency) params.set('urgency', toolArgs.urgency as string);
+        if (toolArgs.cost !== undefined) params.set('cost', String(toolArgs.cost));
+        if (toolArgs.context) params.set('context', toolArgs.context as string);
+
+        const checkRes = await rovnGet(`/api/agents/${config.agentId}/check?${params}`);
+        const decision = ((checkRes.data as Record<string, unknown>)?.decision ?? '') as string;
+        autoLog(`Checked: ${toolArgs.action} → ${decision}`, 'governance');
+        return toolResult(checkRes);
       }
 
       case 'rovn_request_approval': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
-        return toolResult(await rovnPost(`/api/agents/${config.agentId}/approvals`, {
+        const approvalRes = await rovnPost(`/api/agents/${config.agentId}/approvals`, {
           type: toolArgs.type ?? 'action',
           title: toolArgs.title,
           description: toolArgs.description,
           urgency: toolArgs.urgency ?? 'medium',
-        }));
+        });
+        if (approvalRes.success) autoLog(`Requested approval: ${toolArgs.title}`, 'governance');
+        return toolResult(approvalRes);
       }
 
       case 'rovn_get_tasks': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
         const query = toolArgs.status ? `?status=${toolArgs.status}` : '';
@@ -254,16 +372,18 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
       }
 
       case 'rovn_update_task': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
-        return toolResult(await rovnPatch(`/api/tasks/${toolArgs.task_id}`, {
+        const taskRes = await rovnPatch(`/api/tasks/${toolArgs.task_id}`, {
           status: toolArgs.status,
-        }));
+        });
+        if (taskRes.success) autoLog(`Task ${toolArgs.task_id}: → ${toolArgs.status}`, 'task_management');
+        return toolResult(taskRes);
       }
 
       case 'rovn_get_report_card': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
         const days = toolArgs.days ? `?days=${toolArgs.days}` : '';
@@ -271,7 +391,7 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
       }
 
       case 'rovn_get_trust_score': {
-        const err = requireAgent();
+        const err = requireAgent(config);
         if (err) return toolResult({ success: false, error: err });
 
         return toolResult(await rovnGet(`/api/agents/${config.agentId}/trust-score`));
@@ -281,11 +401,14 @@ async function handleToolCall(params: { name: string; arguments: Record<string, 
         return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
     }
   } catch (error) {
-    return { content: [{ type: 'text', text: `Error: ${error}` }], isError: true };
+    return {
+      content: [{ type: 'text', text: `Error: ${error instanceof Error ? error.message : String(error)}` }],
+      isError: true,
+    };
   }
 }
 
-function toolResult(res: Record<string, unknown>) {
+export function toolResult(res: Record<string, unknown>) {
   return {
     content: [{
       type: 'text',
@@ -295,63 +418,45 @@ function toolResult(res: Record<string, unknown>) {
   };
 }
 
-// ─── HTTP Client ────────────────────────────────────────────
-
-async function rovnPost(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
-
-  const res = await fetch(`${config.rovnUrl}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  });
-  return res.json() as Promise<Record<string, unknown>>;
-}
-
-async function rovnGet(path: string): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = {};
-  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
-
-  const res = await fetch(`${config.rovnUrl}${path}`, { headers });
-  return res.json() as Promise<Record<string, unknown>>;
-}
-
-async function rovnPatch(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
-
-  const res = await fetch(`${config.rovnUrl}${path}`, {
-    method: 'PATCH',
-    headers,
-    body: JSON.stringify(body),
-  });
-  return res.json() as Promise<Record<string, unknown>>;
-}
-
 // ─── STDIO Transport ────────────────────────────────────────
 
-const rl = createInterface({ input: process.stdin });
-let buffer = '';
+// Only start STDIO transport when run directly (not imported for testing)
+const isDirectRun = require.main === module;
 
-rl.on('line', async (line: string) => {
-  buffer += line;
-  try {
-    const request = JSON.parse(buffer);
-    buffer = '';
+if (isDirectRun) {
+  const rl = createInterface({ input: process.stdin });
+  let buffer = '';
 
-    const result = await handleRequest(request);
+  rl.on('line', async (line: string) => {
+    buffer += line;
+    let request: { id: number; method: string; params?: Record<string, unknown> };
+    try {
+      request = JSON.parse(buffer);
+      buffer = '';
+    } catch {
+      // Incomplete JSON — keep buffering
+      return;
+    }
 
-    const response = {
-      jsonrpc: '2.0',
-      id: request.id,
-      result,
-    };
+    try {
+      const result = await handleRequest(request);
 
-    process.stdout.write(JSON.stringify(response) + '\n');
-  } catch {
-    // Incomplete JSON, keep buffering
-  }
-});
+      // Notifications (null result) don't get a response
+      if (result === null) return;
 
-process.stderr.write('Rovn MCP Server started\n');
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        result,
+      }) + '\n');
+    } catch (error) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: request.id,
+        error: { code: -32603, message: `Internal error: ${error instanceof Error ? error.message : String(error)}` },
+      }) + '\n');
+    }
+  });
+
+  process.stderr.write('Rovn MCP Server started\n');
+}

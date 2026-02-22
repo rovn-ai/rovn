@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test": "tsc && node --test dist/server.test.js"
   },
   "keywords": [
     "rovn",
