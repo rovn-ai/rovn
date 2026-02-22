@@ -6,6 +6,10 @@
   "bin": {
     "rovn-mcp-server": "./dist/server.js"
   },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
