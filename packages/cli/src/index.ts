@@ -9,10 +9,11 @@ import { reportCommand } from './commands/report.js';
 import { approveCommand } from './commands/approve.js';
 import { statusCommand } from './commands/status.js';
 import { agentsCommand, useCommand, whoamiCommand } from './commands/agents.js';
+import { tuiCommand } from './commands/tui.js';
 import { fmt, error } from './format.js';
 import { ApiError } from './api.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 class ExitError extends Error {
   constructor() { super(); this.name = 'ExitError'; }
@@ -30,6 +31,7 @@ const COMMANDS: Record<string, string> = {
   trust: 'View trust score',
   report: 'View report card',
   status: 'Agent overview',
+  tui: 'Interactive terminal dashboard',
 };
 
 const COMMAND_NAMES = Object.keys(COMMANDS);
@@ -138,6 +140,18 @@ ${fmt.bold('Options:')}
 ${fmt.bold('Usage:')}
   rovn status`,
 
+  tui: `${fmt.bold('rovn tui')} — Interactive terminal dashboard
+
+${fmt.bold('Usage:')}
+  rovn tui
+
+${fmt.bold('Keys:')}
+  ↑/↓          Navigate items
+  Shift+↑/↓    Switch panels
+  Tab           Next panel
+  r             Refresh data
+  q / Esc       Quit`,
+
   agents: `${fmt.bold('rovn agents')} — List all registered agent profiles
 
 ${fmt.bold('Usage:')}
@@ -184,6 +198,7 @@ ${fmt.bold('Insights:')}
   trust               View trust score
   report              View report card
   status              Agent overview
+  tui                 Interactive dashboard
 
 ${fmt.bold('Global Options:')}
   --help, -h          Show help (use with command for details)
@@ -261,6 +276,9 @@ async function main(): Promise<void> {
       break;
     case 'whoami':
       await whoamiCommand();
+      break;
+    case 'tui':
+      await tuiCommand();
       break;
     default: {
       const suggestion = suggestCommand(command);

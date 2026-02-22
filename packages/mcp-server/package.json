@@ -1,5 +1,5 @@
 {
-  "name": "@rovn/mcp-server",
+  "name": "@rovn-ai/mcp-server",
   "version": "0.1.0",
   "description": "Rovn MCP Server — governance tools for Claude, GPT, and any MCP-compatible agent",
   "main": "dist/server.js",

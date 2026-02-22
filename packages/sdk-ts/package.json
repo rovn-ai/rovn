@@ -1,5 +1,5 @@
 {
-  "name": "@rovn/agent",
+  "name": "@rovn-ai/agent",
   "version": "1.1.0",
   "description": "TypeScript SDK for Rovn Agent OS",
   "main": "dist/index.js",
