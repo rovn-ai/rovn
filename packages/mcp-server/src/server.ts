@@ -280,15 +280,28 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
           // Validate existing credentials by fetching trust score
           const check = await rovnGet(`/api/agents/${config.agentId}/trust-score`);
           if (check.success) {
+            const data = (check.data ?? check) as Record<string, unknown>;
             return toolResult({
               success: true,
               data: {
                 id: config.agentId,
+                name: data.agent_name ?? toolArgs.name,
                 message: 'Already registered. Using existing agent credentials.',
               },
             });
           }
-          // If validation fails, fall through to re-register
+          // Pre-configured credentials (from CLI args) — keep using them even if validation fails
+          // This prevents creating duplicate agents when the server is temporarily unavailable
+          if (getArg(process.argv.slice(2), '--api-key') || process.env.ROVN_API_KEY) {
+            return toolResult({
+              success: true,
+              data: {
+                id: config.agentId,
+                message: 'Using pre-configured credentials (server validation skipped).',
+              },
+            });
+          }
+          // Only clear credentials if they were from a previous dynamic registration
           config.apiKey = '';
           config.agentId = '';
         }
