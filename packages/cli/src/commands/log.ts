@@ -1,6 +1,6 @@
 import { requireAgent } from '../config.js';
 import { apiGet, apiPost } from '../api.js';
-import { fmt, table, timeAgo } from '../format.js';
+import { fmt, table, timeAgo, spinner, success, error, emptyState, header } from '../format.js';
 
 export async function logCommand(args: string[]): Promise<void> {
   const agent = requireAgent();
@@ -9,7 +9,7 @@ export async function logCommand(args: string[]): Promise<void> {
   const pushIdx = args.indexOf('--push');
   if (pushIdx >= 0) {
     const title = args[pushIdx + 1];
-    if (!title) { console.error(fmt.red('Usage: rovn log --push "Activity title"')); process.exit(1); }
+    if (!title) { console.error(error('Missing title', 'Usage: rovn log --push "Activity title"')); process.exit(1); }
 
     let type = 'action';
     const typeIdx = args.indexOf('--type');
@@ -19,16 +19,18 @@ export async function logCommand(args: string[]): Promise<void> {
     const descIdx = args.indexOf('--desc');
     if (descIdx >= 0 && args[descIdx + 1]) description = args[descIdx + 1];
 
+    const s = spinner('Logging activity...');
     const res = await apiPost(agent, `/api/agents/${agent.id}/activities`, {
       title,
       type,
       description: description || undefined,
     });
+    s.stop();
 
     if (res.success) {
-      console.log(fmt.green(`Logged: ${title}`));
+      console.log(success(`Logged: ${fmt.bold(title)}`));
     } else {
-      console.error(fmt.red(`Failed: ${res.error ?? 'Unknown error'}`));
+      console.error(error(`Failed: ${res.error ?? 'Unknown error'}`));
     }
     return;
   }
@@ -38,10 +40,12 @@ export async function logCommand(args: string[]): Promise<void> {
   const lastIdx = args.indexOf('--last');
   if (lastIdx >= 0 && args[lastIdx + 1]) limit = parseInt(args[lastIdx + 1], 10) || 10;
 
+  const s = spinner('Loading activities...');
   const res = await apiGet(agent, `/api/agents/${agent.id}/activities?limit=${limit}`);
+  s.stop();
 
   if (!res.success) {
-    console.error(fmt.red(`Failed: ${res.error ?? 'Unknown error'}`));
+    console.error(error(`Failed: ${res.error ?? 'Unknown error'}`));
     process.exit(1);
   }
 
@@ -49,11 +53,11 @@ export async function logCommand(args: string[]): Promise<void> {
   const activities = (resData.activities ?? res.activities ?? []) as Array<Record<string, unknown>>;
 
   if (activities.length === 0) {
-    console.log(fmt.dim('No activities yet. Log one with: rovn log --push "Did something"'));
+    console.log(emptyState('No activities yet.', 'Log one with: rovn log --push "Did something"'));
     return;
   }
 
-  console.log(fmt.bold(`\nRecent Activities (${agent.name})\n`));
+  console.log(header(`Recent Activities (${activities.length})`));
 
   const rows = activities.map((a, i) => [
     String(i + 1),

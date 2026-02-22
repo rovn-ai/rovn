@@ -1,7 +1,7 @@
 import { createInterface } from 'readline';
 import { loadConfig, saveConfig } from '../config.js';
 import { apiPost } from '../api.js';
-import { fmt } from '../format.js';
+import { fmt, spinner, box, success, error, header, symbols } from '../format.js';
 
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -14,7 +14,7 @@ function prompt(question: string): Promise<string> {
 }
 
 export async function initCommand(args: string[]): Promise<void> {
-  console.log(fmt.bold('\nRovn Agent Setup\n'));
+  console.log(header('Rovn Agent Setup'));
 
   // Parse flags
   let name = '';
@@ -30,15 +30,14 @@ export async function initCommand(args: string[]): Promise<void> {
   }
 
   // Interactive prompts for missing values
-  if (!name) name = await prompt('Agent name: ');
-  if (!name) { console.error(fmt.red('Agent name is required.')); process.exit(1); }
+  if (!name) name = await prompt(`  ${symbols.arrow} Agent name: `);
+  if (!name) { console.error(error('Agent name is required.')); process.exit(1); }
 
   if (!profile) profile = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  if (!email) email = await prompt('Owner email (optional): ');
-
-  console.log(`\nRegistering ${fmt.cyan(name)} at ${fmt.dim(url)}...`);
+  if (!email) email = await prompt(`  ${symbols.arrow} Owner email (optional): `);
 
   // Register via API
+  const s = spinner(`Registering ${name}...`);
   const res = await apiPost(
     { id: '', api_key: '', name: '', url },
     '/api/agents/register',
@@ -49,9 +48,10 @@ export async function initCommand(args: string[]): Promise<void> {
       metadata: { platform: 'cli', registered_at: new Date().toISOString() },
     },
   );
+  s.stop();
 
   if (!res.success) {
-    console.error(fmt.red(`\nRegistration failed: ${res.error ?? 'Unknown error'}`));
+    console.error(error(`Registration failed: ${res.error ?? 'Unknown error'}`));
     process.exit(1);
   }
 
@@ -68,14 +68,23 @@ export async function initCommand(args: string[]): Promise<void> {
   config.current = profile;
   saveConfig(config);
 
-  console.log(fmt.green('\nAgent registered successfully!\n'));
-  console.log(`  Profile:   ${fmt.bold(profile)}`);
-  console.log(`  Agent ID:  ${fmt.dim(data.id as string)}`);
-  console.log(`  Name:      ${data.name as string}`);
-  if (data.claim_url) {
-    console.log(`\n  ${fmt.yellow('Share this URL with the owner to claim:')}`);
-    console.log(`  ${fmt.cyan(data.claim_url as string)}`);
-  }
+  // Success card
+  const lines = [
+    `${fmt.green(symbols.check)} ${fmt.bold('Agent registered successfully!')}`,
+    ``,
+    `${fmt.dim('Profile')}    ${fmt.cyan(profile)}`,
+    `${fmt.dim('Agent ID')}   ${data.id as string}`,
+    `${fmt.dim('Name')}       ${data.name as string}`,
+    `${fmt.dim('Server')}     ${url}`,
+    ...(data.claim_url ? [
+      ``,
+      `${fmt.yellow(symbols.warning)} ${fmt.bold('Share this URL with the owner to claim:')}`,
+      `${fmt.cyan(data.claim_url as string)}`,
+    ] : []),
+  ];
+
+  console.log('');
+  console.log(box(lines, 'Registration Complete'));
   console.log(`\n  Config saved to ${fmt.dim('~/.rovnrc')}`);
   console.log(`  Run ${fmt.cyan('rovn status')} to check your agent.\n`);
 }

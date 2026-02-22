@@ -1,13 +1,13 @@
 import { requireAgent } from '../config.js';
 import { apiGet } from '../api.js';
-import { fmt } from '../format.js';
+import { fmt, spinner, box, error, symbols } from '../format.js';
 
 export async function checkCommand(args: string[]): Promise<void> {
   const agent = requireAgent();
 
   const action = args[0];
   if (!action) {
-    console.error(fmt.red('Usage: rovn check <action> [--urgency low|medium|high|critical] [--cost 10.00]'));
+    console.error(error('Missing action', 'Usage: rovn check <action> [--urgency low|medium|high|critical] [--cost 10.00]'));
     process.exit(1);
   }
 
@@ -25,23 +25,32 @@ export async function checkCommand(args: string[]): Promise<void> {
   if (cost !== undefined) params.set('cost', String(cost));
   if (context) params.set('context', context);
 
+  const s = spinner(`Checking: ${action}...`);
   const res = await apiGet(agent, `/api/agents/${agent.id}/check?${params}`);
+  s.stop();
 
   if (!res.success) {
-    console.error(fmt.red(`Failed: ${res.error ?? 'Unknown error'}`));
+    console.error(error(`Failed: ${res.error ?? 'Unknown error'}`));
     process.exit(1);
   }
 
   const data = (res.data ?? res) as Record<string, unknown>;
   const decision = (data.decision as string) ?? 'unknown';
 
-  const icon = decision === 'approved' ? fmt.green('APPROVED')
-    : decision === 'denied' ? fmt.red('DENIED')
-    : fmt.yellow('NEEDS APPROVAL');
+  const decisionDisplay = decision === 'approved'
+    ? fmt.bgGreen(` ${symbols.check} APPROVED `)
+    : decision === 'denied'
+    ? fmt.bgRed(` ${symbols.cross} DENIED `)
+    : fmt.bgYellow(` ${symbols.warning} NEEDS APPROVAL `);
 
-  console.log(`\n  Action:   ${fmt.bold(action)}`);
-  console.log(`  Decision: ${icon}`);
-  if (data.reason) console.log(`  Reason:   ${data.reason as string}`);
-  if (data.trust_level !== undefined) console.log(`  Trust:    Level ${data.trust_level as number}`);
+  const lines = [
+    `${fmt.dim('Action')}    ${fmt.bold(action)}`,
+    `${fmt.dim('Decision')}  ${decisionDisplay}`,
+    ...(data.reason ? [`${fmt.dim('Reason')}    ${data.reason as string}`] : []),
+    ...(data.trust_level !== undefined ? [`${fmt.dim('Trust')}     Level ${data.trust_level as number}`] : []),
+  ];
+
+  console.log('');
+  console.log(box(lines, 'Pre-flight Check'));
   console.log('');
 }
