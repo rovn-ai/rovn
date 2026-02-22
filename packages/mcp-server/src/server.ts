@@ -48,7 +48,15 @@ export function createConfig(args: string[]): ServerConfig {
   };
 }
 
-const config = createConfig(process.argv.slice(2));
+export const config = createConfig(process.argv.slice(2));
+
+/** Reset config for testing. */
+export function resetConfig(overrides: Partial<ServerConfig> = {}): void {
+  config.rovnUrl = overrides.rovnUrl ?? 'https://rovn.io';
+  config.ownerEmail = overrides.ownerEmail ?? '';
+  config.apiKey = overrides.apiKey ?? '';
+  config.agentId = overrides.agentId ?? '';
+}
 
 export function requireAgent(cfg: ServerConfig): string | null {
   if (!cfg.agentId || !cfg.apiKey) {
