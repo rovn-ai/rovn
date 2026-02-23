@@ -5,7 +5,7 @@ import { fmt, table, timeAgo, spinner, success, error, emptyState, header } from
 export async function logCommand(args: string[]): Promise<void> {
   const agent = requireAgent();
 
-  // rovn log --push "title" --type "type"
+  // rovn log --push "title" --type "type" --task <id> --session <id>
   const pushIdx = args.indexOf('--push');
   if (pushIdx >= 0) {
     const title = args[pushIdx + 1];
@@ -19,11 +19,21 @@ export async function logCommand(args: string[]): Promise<void> {
     const descIdx = args.indexOf('--desc');
     if (descIdx >= 0 && args[descIdx + 1]) description = args[descIdx + 1];
 
+    let taskId: string | undefined;
+    const taskIdx = args.indexOf('--task');
+    if (taskIdx >= 0 && args[taskIdx + 1]) taskId = args[taskIdx + 1];
+
+    let sessionId: string | undefined;
+    const sessIdx = args.indexOf('--session');
+    if (sessIdx >= 0 && args[sessIdx + 1]) sessionId = args[sessIdx + 1];
+
     const s = spinner('Logging activity...');
     const res = await apiPost(agent, `/api/agents/${agent.id}/activities`, {
       title,
       type,
       description: description || undefined,
+      task_id: taskId || undefined,
+      session_id: sessionId || undefined,
     });
     s.stop();
 
@@ -35,13 +45,25 @@ export async function logCommand(args: string[]): Promise<void> {
     return;
   }
 
-  // rovn log (list activities)
+  // rovn log (list activities) [--session <id>] [--last N]
   let limit = 10;
   const lastIdx = args.indexOf('--last');
   if (lastIdx >= 0 && args[lastIdx + 1]) limit = parseInt(args[lastIdx + 1], 10) || 10;
 
+  let filterSession = '';
+  const filterSessIdx = args.indexOf('--session');
+  if (filterSessIdx >= 0 && args[filterSessIdx + 1]) filterSession = args[filterSessIdx + 1];
+
+  let filterTask = '';
+  const filterTaskIdx = args.indexOf('--task');
+  if (filterTaskIdx >= 0 && args[filterTaskIdx + 1]) filterTask = args[filterTaskIdx + 1];
+
+  let queryStr = `/api/agents/${agent.id}/activities?limit=${limit}`;
+  if (filterSession) queryStr += `&session_id=${filterSession}`;
+  if (filterTask) queryStr += `&task_id=${filterTask}`;
+
   const s = spinner('Loading activities...');
-  const res = await apiGet(agent, `/api/agents/${agent.id}/activities?limit=${limit}`);
+  const res = await apiGet(agent, queryStr);
   s.stop();
 
   if (!res.success) {

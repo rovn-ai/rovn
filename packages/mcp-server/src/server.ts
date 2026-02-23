@@ -32,6 +32,7 @@ export interface ServerConfig {
   ownerEmail: string;
   apiKey: string;
   agentId: string;
+  sessionId: string;
 }
 
 export function getArg(args: string[], flag: string): string | undefined {
@@ -45,6 +46,7 @@ export function createConfig(args: string[]): ServerConfig {
     ownerEmail: getArg(args, '--email') ?? process.env.ROVN_OWNER_EMAIL ?? '',
     apiKey: getArg(args, '--api-key') ?? process.env.ROVN_API_KEY ?? '',
     agentId: getArg(args, '--agent-id') ?? process.env.ROVN_AGENT_ID ?? '',
+    sessionId: '',
   };
 }
 
@@ -56,6 +58,7 @@ export function resetConfig(overrides: Partial<ServerConfig> = {}): void {
   config.ownerEmail = overrides.ownerEmail ?? '';
   config.apiKey = overrides.apiKey ?? '';
   config.agentId = overrides.agentId ?? '';
+  config.sessionId = overrides.sessionId ?? '';
 }
 
 export function requireAgent(cfg: ServerConfig): string | null {
@@ -144,7 +147,24 @@ function autoLog(title: string, type: string = 'governance'): void {
     type,
     title,
     metadata: { source: 'mcp-auto' },
+    session_id: config.sessionId || undefined,
   }).catch(() => { /* ignore auto-log failures */ });
+}
+
+// ─── Session Helpers ─────────────────────────────────────────
+
+async function startSession(): Promise<string | null> {
+  if (!config.agentId || !config.apiKey) return null;
+  try {
+    const res = await rovnPost(`/api/agents/${config.agentId}/sessions`, {});
+    if (res.success) {
+      const data = res.data as Record<string, unknown>;
+      const sessionId = data.id as string;
+      config.sessionId = sessionId;
+      return sessionId;
+    }
+  } catch { /* ignore session start failures */ }
+  return null;
 }
 
 // ─── MCP Tools Definition ───────────────────────────────────
@@ -178,6 +198,7 @@ export const TOOLS = [
         type: { type: 'string', description: 'Activity type (e.g., code_generation, testing, deployment, review)' },
         description: { type: 'string', description: 'Detailed description of what was done' },
         metadata: { type: 'object', description: 'Additional structured data (e.g., { files_changed: 3 })' },
+        task_id: { type: 'string', description: 'Optional task ID to link this activity to a specific task' },
       },
       required: ['title'],
     },
@@ -250,6 +271,27 @@ export const TOOLS = [
       properties: {},
     },
   },
+  {
+    name: 'rovn_start_session',
+    description: 'Start a new session. Activities logged after this will be automatically grouped under this session.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        name: { type: 'string', description: 'Optional session name' },
+        metadata: { type: 'object', description: 'Optional metadata for the session' },
+      },
+    },
+  },
+  {
+    name: 'rovn_end_session',
+    description: 'End the current session. Optionally provide a summary.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        summary: { type: 'string', description: 'Optional summary of what was accomplished in this session' },
+      },
+    },
+  },
 ];
 
 // ─── MCP Protocol Handler ───────────────────────────────────
@@ -289,11 +331,14 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
           const check = await rovnGet(`/api/agents/${config.agentId}/trust-score`);
           if (check.success) {
             const data = (check.data ?? check) as Record<string, unknown>;
+            // Auto-start session on reuse
+            if (!config.sessionId) await startSession();
             return toolResult({
               success: true,
               data: {
                 id: config.agentId,
                 name: data.agent_name ?? toolArgs.name,
+                session_id: config.sessionId || undefined,
                 message: 'Already registered. Using existing agent credentials.',
               },
             });
@@ -301,10 +346,13 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
           // Pre-configured credentials (from CLI args) — keep using them even if validation fails
           // This prevents creating duplicate agents when the server is temporarily unavailable
           if (getArg(process.argv.slice(2), '--api-key') || process.env.ROVN_API_KEY) {
+            // Auto-start session on reuse
+            if (!config.sessionId) await startSession();
             return toolResult({
               success: true,
               data: {
                 id: config.agentId,
+                session_id: config.sessionId || undefined,
                 message: 'Using pre-configured credentials (server validation skipped).',
               },
             });
@@ -328,12 +376,15 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
           config.apiKey = data.api_key as string;
           config.agentId = data.id as string;
           autoLog(`Registered as ${data.name}`, 'registration');
+          // Auto-start session on new registration
+          await startSession();
           return toolResult({
             success: true,
             data: {
               id: data.id,
               name: data.name,
               claim_url: data.claim_url,
+              session_id: config.sessionId || undefined,
               message: 'Agent registered! Share the claim_url with the owner. API key saved for this session.',
             },
           });
@@ -350,6 +401,8 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
           title: toolArgs.title,
           description: toolArgs.description,
           metadata: toolArgs.metadata,
+          session_id: config.sessionId || undefined,
+          task_id: toolArgs.task_id || undefined,
         }));
       }
 
@@ -416,6 +469,46 @@ export async function handleToolCall(params: { name: string; arguments: Record<s
         if (err) return toolResult({ success: false, error: err });
 
         return toolResult(await rovnGet(`/api/agents/${config.agentId}/trust-score`));
+      }
+
+      case 'rovn_start_session': {
+        const err = requireAgent(config);
+        if (err) return toolResult({ success: false, error: err });
+
+        // End existing session if any
+        if (config.sessionId) {
+          await rovnPatch(`/api/sessions/${config.sessionId}`, {});
+          config.sessionId = '';
+        }
+
+        const sessionRes = await rovnPost(`/api/agents/${config.agentId}/sessions`, {
+          name: toolArgs.name,
+          metadata: toolArgs.metadata,
+        });
+        if (sessionRes.success) {
+          const data = sessionRes.data as Record<string, unknown>;
+          config.sessionId = data.id as string;
+          autoLog(`Session started: ${toolArgs.name ?? data.id}`, 'session');
+        }
+        return toolResult(sessionRes);
+      }
+
+      case 'rovn_end_session': {
+        const err = requireAgent(config);
+        if (err) return toolResult({ success: false, error: err });
+
+        if (!config.sessionId) {
+          return toolResult({ success: false, error: 'No active session to end' });
+        }
+
+        const endRes = await rovnPatch(`/api/sessions/${config.sessionId}`, {
+          summary: toolArgs.summary,
+        });
+        if (endRes.success) {
+          autoLog(`Session ended: ${config.sessionId}`, 'session');
+          config.sessionId = '';
+        }
+        return toolResult(endRes);
       }
 
       default:

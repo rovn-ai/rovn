@@ -9,6 +9,7 @@ import { reportCommand } from './commands/report.js';
 import { approveCommand } from './commands/approve.js';
 import { statusCommand } from './commands/status.js';
 import { agentsCommand, useCommand, whoamiCommand } from './commands/agents.js';
+import { sessionCommand } from './commands/session.js';
 import { tuiCommand } from './commands/tui.js';
 import { fmt, error } from './format.js';
 import { ApiError } from './api.js';
@@ -25,6 +26,7 @@ const COMMANDS: Record<string, string> = {
   use: 'Switch active agent',
   whoami: 'Show current agent',
   log: 'View/push activities',
+  session: 'Manage sessions',
   tasks: 'View/manage assigned tasks',
   check: 'Pre-flight governance check',
   approve: 'Manage approvals',
@@ -89,7 +91,23 @@ ${fmt.bold('Options:')}
   --push <title>    Log a new activity
   --type <type>     Activity type (default: action)
   --desc <text>     Description
+  --task <id>       Link activity to a task
+  --session <id>    Link activity to / filter by session
   --last <n>        Number of activities to show (default: 10)`,
+
+  session: `${fmt.bold('rovn session')} — Manage sessions
+
+${fmt.bold('Usage:')}
+  rovn session                 Show current active session
+  rovn session start           Start a new session
+  rovn session end             End the current session
+  rovn session list            List recent sessions
+
+${fmt.bold('Options:')}
+  --name <name>     Session name (start)
+  --summary <text>  Session summary (end)
+  --id <id>         Session ID (end specific session)
+  --limit <n>       Number of sessions to show (list, default: 10)`,
 
   tasks: `${fmt.bold('rovn tasks')} — View and manage assigned tasks
 
@@ -183,6 +201,8 @@ ${fmt.bold('Setup:')}
 ${fmt.bold('Activity:')}
   log                 View recent activities
   log --push "title"  Log a new activity
+  session             Manage sessions
+  session start       Start a new session
 
 ${fmt.bold('Tasks:')}
   tasks               View assigned tasks
@@ -249,6 +269,9 @@ async function main(): Promise<void> {
       break;
     case 'log':
       await logCommand(rest);
+      break;
+    case 'session':
+      await sessionCommand(rest);
       break;
     case 'tasks':
       await tasksCommand(rest);

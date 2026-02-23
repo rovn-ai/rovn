@@ -74,22 +74,22 @@ describe('createConfig', () => {
 
 describe('requireAgent', () => {
   it('returns null when agent is configured', () => {
-    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: 'key', agentId: 'id' };
+    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: 'key', agentId: 'id', sessionId: '' };
     assert.equal(requireAgent(cfg), null);
   });
 
   it('returns error when apiKey is missing', () => {
-    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: '', agentId: 'id' };
+    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: '', agentId: 'id', sessionId: '' };
     assert.ok(requireAgent(cfg)?.includes('Not registered'));
   });
 
   it('returns error when agentId is missing', () => {
-    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: 'key', agentId: '' };
+    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: 'key', agentId: '', sessionId: '' };
     assert.ok(requireAgent(cfg)?.includes('Not registered'));
   });
 
   it('returns error when both are missing', () => {
-    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: '', agentId: '' };
+    const cfg: ServerConfig = { rovnUrl: '', ownerEmail: '', apiKey: '', agentId: '', sessionId: '' };
     assert.ok(requireAgent(cfg) !== null);
   });
 });
@@ -124,8 +124,8 @@ describe('toolResult', () => {
 // ─── TOOLS definition ────────────────────────────────────────
 
 describe('TOOLS', () => {
-  it('defines exactly 8 tools', () => {
-    assert.equal(TOOLS.length, 8);
+  it('defines exactly 10 tools', () => {
+    assert.equal(TOOLS.length, 10);
   });
 
   it('all tools have name, description, and inputSchema', () => {
@@ -178,7 +178,7 @@ describe('handleRequest', () => {
   it('responds to tools/list', async () => {
     const result = await handleRequest({ id: 2, method: 'tools/list' }) as { tools: unknown[] };
     assert.ok(Array.isArray(result.tools));
-    assert.equal(result.tools.length, 8);
+    assert.equal(result.tools.length, 10);
   });
 
   it('returns null for notifications/initialized', async () => {
@@ -199,7 +199,8 @@ describe('handleToolCall', () => {
   it('returns error for unregistered agent tools', async () => {
     resetConfig(); // Clear all credentials
     const tools = ['rovn_log_activity', 'rovn_check_action', 'rovn_request_approval',
-                   'rovn_get_tasks', 'rovn_update_task', 'rovn_get_report_card', 'rovn_get_trust_score'];
+                   'rovn_get_tasks', 'rovn_update_task', 'rovn_get_report_card', 'rovn_get_trust_score',
+                   'rovn_start_session', 'rovn_end_session'];
 
     for (const toolName of tools) {
       const result = await handleToolCall({
@@ -227,7 +228,7 @@ describe('JSON-RPC round-trip', () => {
     assert.ok(init);
 
     const list = await handleRequest({ id: 2, method: 'tools/list' }) as { tools: unknown[] };
-    assert.equal(list.tools.length, 8);
+    assert.equal(list.tools.length, 10);
   });
 
   it('tools/call with unregistered agent', async () => {
@@ -655,5 +656,181 @@ describe('Network failure resilience', () => {
 
     assert.equal(parsed.success, false);
     assert.ok(parsed.error.includes('connect'));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Session Management Tests
+// ═══════════════════════════════════════════════════════════════
+
+describe('rovn_start_session — manual session start', () => {
+  afterEach(() => restoreFetch());
+
+  it('starts a session and stores sessionId in config', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-sess', rovnUrl: 'https://test.rovn.io' });
+
+    mockFetch(async (url: string) => {
+      if (url.includes('/sessions')) {
+        return jsonResponse({
+          success: true,
+          data: { id: 'session-123', agent_id: 'agent-sess', status: 'active' },
+        }, 201);
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const result = await handleToolCall({ name: 'rovn_start_session', arguments: { name: 'Test Session' } });
+    const parsed = JSON.parse(result.content[0].text);
+
+    assert.equal(result.isError, false);
+    assert.equal(parsed.data.id, 'session-123');
+    assert.equal(config.sessionId, 'session-123');
+  });
+
+  it('ends existing session before starting a new one', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-sess', rovnUrl: 'https://test.rovn.io', sessionId: 'old-session' });
+
+    const capturedUrls: string[] = [];
+    mockFetch(async (url: string, init?: RequestInit) => {
+      capturedUrls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url.includes('/sessions/old-session') && init?.method === 'PATCH') {
+        return jsonResponse({ success: true, data: { id: 'old-session', status: 'ended' } });
+      }
+      if (url.includes('/sessions') && init?.method === 'POST') {
+        return jsonResponse({ success: true, data: { id: 'new-session', status: 'active' } }, 201);
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await handleToolCall({ name: 'rovn_start_session', arguments: { name: 'New Session' } });
+
+    assert.ok(capturedUrls.some(u => u.includes('PATCH') && u.includes('old-session')), 'Should end old session');
+    assert.equal(config.sessionId, 'new-session');
+  });
+});
+
+describe('rovn_end_session — manual session end', () => {
+  afterEach(() => restoreFetch());
+
+  it('ends the current session and clears sessionId', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-sess', rovnUrl: 'https://test.rovn.io', sessionId: 'session-abc' });
+
+    mockFetch(async (url: string) => {
+      if (url.includes('/sessions/session-abc')) {
+        return jsonResponse({ success: true, data: { id: 'session-abc', status: 'ended' } });
+      }
+      return jsonResponse({ success: true });
+    });
+
+    const result = await handleToolCall({ name: 'rovn_end_session', arguments: { summary: 'Done with work' } });
+    const parsed = JSON.parse(result.content[0].text);
+
+    assert.equal(result.isError, false);
+    assert.equal(parsed.data.status, 'ended');
+    assert.equal(config.sessionId, '');
+  });
+
+  it('returns error when no active session', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-sess', rovnUrl: 'https://test.rovn.io' });
+
+    const result = await handleToolCall({ name: 'rovn_end_session', arguments: {} });
+    const parsed = JSON.parse(result.content[0].text);
+
+    assert.equal(result.isError, true);
+    assert.ok(parsed.error.includes('No active session'));
+  });
+});
+
+describe('Auto-session on registration', () => {
+  afterEach(() => restoreFetch());
+
+  it('auto-starts session after successful registration reuse', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-auto', rovnUrl: 'https://test.rovn.io' });
+
+    mockFetch(async (url: string) => {
+      if (url.includes('/trust-score')) {
+        return jsonResponse({ success: true, data: { score: 90, agent_name: 'Auto Agent' } });
+      }
+      if (url.includes('/sessions') && !url.includes('/activities')) {
+        return jsonResponse({ success: true, data: { id: 'auto-session-1', status: 'active' } }, 201);
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await handleToolCall({ name: 'rovn_register', arguments: { name: 'Auto Agent' } });
+
+    assert.equal(config.sessionId, 'auto-session-1');
+  });
+
+  it('auto-starts session after fresh registration', async () => {
+    resetConfig({ rovnUrl: 'https://test.rovn.io' });
+    const origArgv = process.argv;
+    process.argv = ['node', 'server.js'];
+
+    mockFetch(async (url: string) => {
+      if (url.includes('/register')) {
+        return jsonResponse({
+          success: true,
+          data: { id: 'new-agent', name: 'New', api_key: 'rovn_new_key' },
+        }, 201);
+      }
+      if (url.includes('/sessions') && !url.includes('/activities')) {
+        return jsonResponse({ success: true, data: { id: 'auto-session-new', status: 'active' } }, 201);
+      }
+      return jsonResponse({ success: true });
+    });
+
+    await handleToolCall({ name: 'rovn_register', arguments: { name: 'New Agent' } });
+
+    assert.equal(config.sessionId, 'auto-session-new');
+
+    process.argv = origArgv;
+  });
+});
+
+describe('Activity session_id auto-attachment', () => {
+  afterEach(() => restoreFetch());
+
+  it('attaches session_id to log_activity when session is active', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-att', rovnUrl: 'https://test.rovn.io', sessionId: 'sess-xyz' });
+
+    let capturedBody: Record<string, unknown> = {};
+    mockFetch(async (_url: string, init?: RequestInit) => {
+      if (init?.body) capturedBody = JSON.parse(init.body as string);
+      return jsonResponse({ success: true, data: { id: 'act-1' } }, 201);
+    });
+
+    await handleToolCall({ name: 'rovn_log_activity', arguments: { title: 'Test' } });
+
+    assert.equal(capturedBody.session_id, 'sess-xyz');
+  });
+
+  it('does not attach session_id when no session is active', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-att', rovnUrl: 'https://test.rovn.io' });
+
+    let capturedBody: Record<string, unknown> = {};
+    mockFetch(async (_url: string, init?: RequestInit) => {
+      if (init?.body) capturedBody = JSON.parse(init.body as string);
+      return jsonResponse({ success: true, data: { id: 'act-2' } }, 201);
+    });
+
+    await handleToolCall({ name: 'rovn_log_activity', arguments: { title: 'Test' } });
+
+    assert.equal(capturedBody.session_id, undefined);
+  });
+
+  it('passes task_id when explicitly provided', async () => {
+    resetConfig({ apiKey: 'rovn_key', agentId: 'agent-att', rovnUrl: 'https://test.rovn.io', sessionId: 'sess-abc' });
+
+    let capturedBody: Record<string, unknown> = {};
+    mockFetch(async (_url: string, init?: RequestInit) => {
+      if (init?.body) capturedBody = JSON.parse(init.body as string);
+      return jsonResponse({ success: true, data: { id: 'act-3' } }, 201);
+    });
+
+    await handleToolCall({ name: 'rovn_log_activity', arguments: { title: 'Task work', task_id: 'task-42' } });
+
+    assert.equal(capturedBody.session_id, 'sess-abc');
+    assert.equal(capturedBody.task_id, 'task-42');
   });
 });
