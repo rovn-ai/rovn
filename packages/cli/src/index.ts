@@ -14,7 +14,7 @@ import { tuiCommand } from './commands/tui.js';
 import { fmt, error } from './format.js';
 import { ApiError } from './api.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 class ExitError extends Error {
   constructor() { super(); this.name = 'ExitError'; }
